@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RepoLens — GitHub Repository Analyzer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    * { font-family: 'Inter', system-ui, sans-serif; }
+
+    .card-enter {
+      animation: slideUp 0.3s ease forwards;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .analysis-panel {
+      animation: expandDown 0.25s ease forwards;
+      transform-origin: top;
+    }
+    @keyframes expandDown {
+      from { opacity: 0; transform: scaleY(0.95); }
+      to   { opacity: 1; transform: scaleY(1); }
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .toast {
+      animation: toastIn 0.25s ease, toastOut 0.3s ease 2.7s forwards;
+    }
+    @keyframes toastIn  { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(8px); } }
+
+    .complexity-bar-fill {
+      transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    input[type="url"]:focus { outline: none; }
+
+    .repo-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .repo-card { transition: box-shadow 0.2s; }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-900">
+
+  <!-- Nav -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-10">
+    <div class="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <svg class="w-6 h-6 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+        </svg>
+        <span class="font-semibold text-slate-900 tracking-tight">RepoLens</span>
+      </div>
+      <a href="https://github.com" target="_blank" class="text-slate-500 hover:text-slate-800 transition-colors">
+        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+      </a>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-10">
+
+    <!-- Hero -->
+    <div class="mb-10">
+      <h1 class="text-3xl font-bold text-slate-900 mb-2">Analyze any GitHub repository</h1>
+      <p class="text-slate-500 text-base">Get AI-powered summaries, complexity scores, and topic breakdowns in seconds.</p>
+    </div>
+
+    <!-- Add repo form -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 mb-8 shadow-sm">
+      <form id="add-form" class="flex gap-3">
+        <div class="flex-1 flex items-center border border-slate-200 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition-all bg-white">
+          <svg class="w-4 h-4 text-slate-400 ml-3 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          <input
+            id="githubUrl"
+            type="url"
+            placeholder="https://github.com/owner/repository"
+            required
+            class="flex-1 px-3 py-2.5 text-sm bg-transparent text-slate-900 placeholder-slate-400"
+          />
+        </div>
+        <button
+          id="add-btn"
+          type="submit"
+          class="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap"
+        >
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          Add Repository
+        </button>
+      </form>
+    </div>
+
+    <!-- Repo list -->
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-sm font-semibold text-slate-500 uppercase tracking-wide">Repositories</h2>
+      <span id="repo-count" class="text-xs text-slate-400"></span>
+    </div>
+
+    <div id="repos" class="space-y-3"></div>
+
+    <!-- Empty state (hidden by default) -->
+    <div id="empty-state" class="hidden text-center py-20">
+      <svg class="w-12 h-12 text-slate-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+      </svg>
+      <p class="text-slate-500 font-medium">No repositories yet</p>
+      <p class="text-slate-400 text-sm mt-1">Paste a GitHub URL above to get started.</p>
+    </div>
+
+    <!-- Loading skeleton -->
+    <div id="loading-state" class="space-y-3">
+      <div class="bg-white rounded-xl border border-slate-200 p-5 animate-pulse">
+        <div class="flex items-start justify-between">
+          <div class="space-y-2 flex-1">
+            <div class="h-4 bg-slate-200 rounded w-48"></div>
+            <div class="h-3 bg-slate-100 rounded w-80"></div>
+            <div class="flex gap-2 mt-3">
+              <div class="h-5 bg-slate-100 rounded w-16"></div>
+              <div class="h-5 bg-slate-100 rounded w-12"></div>
+            </div>
+          </div>
+          <div class="h-8 bg-slate-100 rounded-lg w-20"></div>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-5 animate-pulse">
+        <div class="flex items-start justify-between">
+          <div class="space-y-2 flex-1">
+            <div class="h-4 bg-slate-200 rounded w-36"></div>
+            <div class="h-3 bg-slate-100 rounded w-64"></div>
+            <div class="flex gap-2 mt-3">
+              <div class="h-5 bg-slate-100 rounded w-20"></div>
+              <div class="h-5 bg-slate-100 rounded w-16"></div>
+            </div>
+          </div>
+          <div class="h-8 bg-slate-100 rounded-lg w-20"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Toast container -->
+  <div id="toast-container" class="fixed bottom-6 right-6 flex flex-col gap-2 z-50"></div>
+
+  <script src="main.js"></script>
+</body>
+</html>

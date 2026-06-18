@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/github_analysis}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/github_analysis}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
   jpa:
@@ -14,4 +14,4 @@ server:
   port: ${SERVER_PORT:8080}
 
 fastapi:
-  base-url: ${FASTAPI_BASE_URL:http://fastapi:8000}
+  base-url: ${FASTAPI_BASE_URL:http://localhost:8000}

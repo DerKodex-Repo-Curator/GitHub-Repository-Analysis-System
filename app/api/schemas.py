@@ -17,3 +17,15 @@ class RepositoryOut(BaseModel):
     created_at: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class AnalysisOut(BaseModel):
+    id: str
+    repository_id: str
+    summary: str
+    complexity_score: float
+    topics: list | None = None
+    embedding_id: str | None = None
+    created_at: str | None = None
+
+    model_config = {"from_attributes": True}

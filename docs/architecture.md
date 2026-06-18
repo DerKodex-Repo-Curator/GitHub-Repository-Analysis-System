@@ -54,29 +54,19 @@ Interview talking points
 - Describe dependency injection via `Depends` and startup/shutdown events used for DB engine lifecycle.
 - Explain how Pydantic models become the API contract and auto-generate OpenAPI docs.
 
-## Docker & Docker Compose
-
-What they are
-- Containers and local orchestration for multi-service applications.
-
-Why used here
-- Reproducible local environment for the entire stack: Postgres, FastAPI, Spring, Chroma.
-
-Interview talking points
-- Explain `depends_on` caveats (start vs healthy conditions) and healthchecks.
-- Discuss volumes for stateful services and how to manage secrets (.env files vs secrets manager).
-
-## RAG / Vector Search (ChromaDB + embeddings)
+## Redis Caching
 
 What it is
-- Retrieval-Augmented Generation uses vector search (nearest neighbors on embeddings) to provide context to LLMs.
+- An in-memory key/value store used here as a read-through cache in front of the GitHub API.
 
 Why used here
-- Allows repository-level Q&A and context-aware summaries without sending entire repo content to the model.
+- GitHub's API rate limits (60 req/hr unauthenticated, 5000/hr authenticated) become a bottleneck when repeatedly analyzing repos. Caching metadata (TTL 1 hr) and READMEs (TTL 6 hr) eliminates redundant network calls and keeps analysis fast.
 
 Interview talking points
-- Explain embedding lifecycle: generate embeddings, upsert to vector store, query with embedding, retrieve passages.
-- Discuss trade-offs: embedding model quality vs cost, vector store scaling, and freshness of indexes.
+- Explain the cache-aside pattern: check cache → on miss, fetch from source and populate cache → return result.
+- Discuss TTL strategy: shorter TTLs for frequently-changing data (stars, forks), longer for stable data (READMEs).
+- Explain graceful degradation: the cache layer is a transparent wrapper — if Redis is down, calls fall through to the live API with no user-visible failure.
+- Discuss cache invalidation: when a re-analysis is triggered, you could explicitly delete the cache keys to force a fresh fetch.
 
 ## Microservices design
 
@@ -97,7 +87,7 @@ What to emphasize
 
 CI pipeline talking points
 - Run unit tests for FastAPI (pytest) and build Spring service (mvn package) in separate jobs.
-- Possibly spin up a test Postgres and Chroma in CI (or use lightweight SQLite and mocks) for integration tests.
+- Use SQLite in-process and mocked external calls (GitHub, OpenAI, Chroma) to keep CI fast and dependency-free.
 
 ---
 

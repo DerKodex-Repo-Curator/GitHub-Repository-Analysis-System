@@ -10,6 +10,11 @@ spring-service/target/
 *.class
 *.jar
 
+# Local SQLite dev database
+*.db
+*.db-shm
+*.db-wal
+
 # OS
 .DS_Store
 Thumbs.db
