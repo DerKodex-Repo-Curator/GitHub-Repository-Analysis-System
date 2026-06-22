@@ -1,94 +1,100 @@
 # Architecture & Interview Talking Points
 
-This document provides concise interview-style talking points for each major technology and design decision in the GitHub Engineering Assistant project.
-
 ## Spring Boot (GraphQL)
 
 What it is
-- Java-based framework for building production-grade REST/GraphQL services.
+- Java-based framework for building production-grade services; used here as the single backend.
 
 Why used here
-- Provides a typed, enterprise-ready GraphQL gateway; aligns with hiring stacks that value Java/Spring.
+- Provides a typed GraphQL API, mature ecosystem, and aligns with enterprise stacks like Intuit's.
 
 Key implementation notes
-- Controllers (resolvers) delegate to `service` layer; business logic is not in resolvers.
-- Uses Spring Data JPA for read-only access against the shared Postgres DB.
+- Controllers (`@Controller`) hold GraphQL resolvers and stay thin — no business logic.
+- Service layer orchestrates GitHub fetching, caching, LLM calls, and DB writes.
+- Repository layer (Spring Data JPA) abstracts all SQL — method names generate queries automatically.
 
 Interview talking points
-- Explain `@QueryMapping` and `@MutationMapping` and why resolvers should be thin.
-- Discuss how you'd handle pagination, error mapping, and batching for GraphQL.
+- Explain `@QueryMapping` / `@MutationMapping` and why resolvers should delegate immediately to a service.
+- Explain `@SchemaMapping` for resolving nested types (e.g. `Repository.analysis`).
+- Discuss `@Async` + a custom `ThreadPoolTaskExecutor` for non-blocking background jobs.
 
 ## GraphQL
 
 What it is
-- A query language and runtime for APIs, enabling clients to request exactly the data they need.
+- A query language for APIs. One endpoint; clients ask for exactly the fields they need.
 
 Why used here
-- Simplifies frontend integrations by returning precise shapes; GraphQL Playground is useful for demos.
+- Avoids over-fetching; a single `repositories` query can include nested `analysis` in one round trip.
+- GraphiQL playground at `/graphiql` makes the API self-documenting and easy to demo.
 
 Interview talking points
-- Explain schema design: types, queries, mutations and how to model relations (Repository -> Analysis).
-- Explain trade-offs vs REST (caching complexity, overfetching vs underfetching).
+- Schema-first design: `schema.graphqls` defines the contract; Java implements it.
+- Explain trade-offs vs REST: no HTTP caching out of the box, but flexible queries and strong typing.
+- Explain how `@SchemaMapping` prevents N+1 queries (and how DataLoader would improve it at scale).
 
-## PostgreSQL
+## PostgreSQL / H2
 
 What it is
-- Reliable relational database, used for persistent storage of repository and analysis records.
+- Relational database. H2 (file-based) for local dev, PostgreSQL for production — same code, different JDBC URL.
 
 Why used here
-- Strong ACID guarantees, array/JSON support for analysis `topics`, and wide industry adoption.
+- Strong ACID guarantees; JPA/Hibernate handles DDL automatically (`ddl-auto: update`).
 
 Interview talking points
-- Explain normalization vs denormalization choices; why you might store analyses in a separate table.
-- Discuss indexing strategies for common queries (e.g., index by `repository_id`, `language`, or `created_at`).
-
-## FastAPI
-
-What it is
-- Modern Python ASGI framework with fast async support and Pydantic validation.
-
-Why used here
-- Best fit for integrating Python ML libraries, async I/O for GitHub and Chroma calls.
-
-Interview talking points
-- Describe dependency injection via `Depends` and startup/shutdown events used for DB engine lifecycle.
-- Explain how Pydantic models become the API contract and auto-generate OpenAPI docs.
+- Explain why H2 lets the project run locally with zero infrastructure.
+- Discuss switching to PostgreSQL in production via a single env var (`DATASOURCE_URL`).
+- Discuss indexing: `repository_id` on analyses, `language` on repositories for filtered queries.
 
 ## Redis Caching
 
 What it is
-- An in-memory key/value store used here as a read-through cache in front of the GitHub API.
+- In-memory key/value store used as a read-through cache in front of the GitHub API.
 
 Why used here
-- GitHub's API rate limits (60 req/hr unauthenticated, 5000/hr authenticated) become a bottleneck when repeatedly analyzing repos. Caching metadata (TTL 1 hr) and READMEs (TTL 6 hr) eliminates redundant network calls and keeps analysis fast.
+- GitHub rate-limits unauthenticated requests to 60/hr. Caching metadata (TTL 1hr) and READMEs (TTL 6hr) eliminates redundant calls across repeated analyses.
 
 Interview talking points
-- Explain the cache-aside pattern: check cache → on miss, fetch from source and populate cache → return result.
-- Discuss TTL strategy: shorter TTLs for frequently-changing data (stars, forks), longer for stable data (READMEs).
-- Explain graceful degradation: the cache layer is a transparent wrapper — if Redis is down, calls fall through to the live API with no user-visible failure.
-- Discuss cache invalidation: when a re-analysis is triggered, you could explicitly delete the cache keys to force a fresh fetch.
+- Cache-aside pattern: check Redis → on miss fetch from GitHub → store result → return.
+- Graceful degradation: all Redis calls are wrapped in try/catch. If Redis is down, the app falls through to the live API with no failure.
+- TTL strategy: shorter for metadata (stars/forks change), longer for READMEs (rarely change).
 
-## Microservices design
+## Async Background Jobs (@Async)
 
 What it is
-- Split services by responsibility: GraphQL gateway vs AI analysis service.
+- Spring's `@Async` annotation executes a method on a separate thread pool, returning immediately to the caller.
 
 Why used here
-- Separation of concerns, language-appropriate tools (Java for GraphQL gateway, Python for AI), and independent scaling.
+- Analysis (GitHub fetch + LLM call) takes 2–10 seconds. Running it in a background thread lets the GraphQL mutation return instantly while analysis completes in the background.
 
 Interview talking points
-- How would you handle shared DB consistency, cross-service transactions, and eventual consistency for analyses?
-- How to implement authentication/authorization across services (JWT, API gateway), and rate-limiting for external API calls.
+- Custom `ThreadPoolTaskExecutor` with `corePoolSize=4`, `maxPoolSize=8`, `queueCapacity=100` — tunable without code changes.
+- The mutation returns a status string; the client polls `analysis(repositoryId)` to detect completion.
 
-## Testing & CI considerations
+## LLM Integration (OpenAI)
+
+What it is
+- HTTP call to OpenAI's chat completions API via Spring's `WebClient`.
+
+Why used here
+- Generates structured analysis (summary, 0–10 complexity score, topic tags) from repo metadata and README text.
+
+Interview talking points
+- `response_format: {type: json_object}` forces structured output — no regex parsing needed.
+- Stub fallback when no API key is set — the app is fully functional for demo without spending money.
+- Text is truncated to 3000 chars before sending to control token cost.
+
+## Testing & CI
 
 What to emphasize
-- Unit tests for business logic; integration tests for DB interactions; mock external HTTP/LLM calls.
+- GitHub Actions builds and tests on every push: `mvn package` compiles, runs unit tests, and packages the JAR.
+- Maven dependency cache cuts CI time significantly on repeat runs.
 
-CI pipeline talking points
-- Run unit tests for FastAPI (pytest) and build Spring service (mvn package) in separate jobs.
-- Use SQLite in-process and mocked external calls (GitHub, OpenAI, Chroma) to keep CI fast and dependency-free.
+Interview talking points
+- Unit test services by mocking `GitHubClient` and `LlmClient` — no real network calls in tests.
+- Integration tests can use H2 in-memory and a mock Redis (Testcontainers for full fidelity).
 
 ---
 
-Use these bullets to prepare concise answers for interviews; you should be able to draw a simple diagram and walk through a request from client -> GraphQL -> service -> DB / FastAPI, and explain why the split exists, how data flows, and how you'd improve or scale the system.
+Use these bullets to prepare concise answers for interviews. Be able to draw the request flow:
+`Browser → GraphQL mutation → RepositoryController → RepositoryService → GitHubClient (Redis cache) → LlmClient (OpenAI) → DB`
+and explain each hop and why it exists.

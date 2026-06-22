@@ -1,28 +1,58 @@
 package com.githubanalysis.service;
 
-import com.githubanalysis.client.FastApiClient;
+import com.githubanalysis.client.GitHubClient;
 import com.githubanalysis.model.AnalysisEntity;
 import com.githubanalysis.model.RepositoryEntity;
 import com.githubanalysis.repository.AnalysisRepository;
 import com.githubanalysis.repository.RepositoryRepository;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Mono;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class RepositoryService {
+
     private final RepositoryRepository repositoryRepository;
     private final AnalysisRepository analysisRepository;
-    private final FastApiClient fastApiClient;
+    private final AnalysisService analysisService;
+    private final GitHubClient gitHubClient;
 
-    public RepositoryService(RepositoryRepository repositoryRepository, AnalysisRepository analysisRepository,
-            FastApiClient fastApiClient) {
+    public RepositoryService(RepositoryRepository repositoryRepository,
+            AnalysisRepository analysisRepository,
+            AnalysisService analysisService,
+            GitHubClient gitHubClient) {
         this.repositoryRepository = repositoryRepository;
         this.analysisRepository = analysisRepository;
-        this.fastApiClient = fastApiClient;
+        this.analysisService = analysisService;
+        this.gitHubClient = gitHubClient;
+    }
+
+    public RepositoryEntity addRepository(String githubUrl) {
+        String[] ownerRepo = parseGithubUrl(githubUrl);
+        Map<String, Object> meta = gitHubClient.fetchMetadata(ownerRepo[0], ownerRepo[1]);
+
+        RepositoryEntity repo = RepositoryEntity.builder()
+                .id(UUID.randomUUID().toString())
+                .githubUrl(githubUrl)
+                .name(ownerRepo[0] + "/" + ownerRepo[1])
+                .description((String) meta.getOrDefault("description", ""))
+                .language((String) meta.getOrDefault("language", ""))
+                .stars(meta.get("stargazers_count") instanceof Number ? ((Number) meta.get("stargazers_count")).intValue() : 0)
+                .createdAt(Instant.now())
+                .build();
+
+        return repositoryRepository.save(repo);
+    }
+
+    public String triggerAnalysis(String id) {
+        RepositoryEntity repo = repositoryRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Repository not found: " + id));
+        analysisService.analyze(repo);
+        return "Analysis started for: " + repo.getName();
     }
 
     public Optional<RepositoryEntity> getRepository(String id) {
@@ -30,21 +60,20 @@ public class RepositoryService {
     }
 
     public List<RepositoryEntity> listRepositories(String language, Integer limit) {
-        if (language != null) {
-            return repositoryRepository.findByLanguage(language);
-        }
-        return repositoryRepository.findAll().stream().limit(limit == null ? 100 : limit).toList();
+        List<RepositoryEntity> repos = (language != null)
+                ? repositoryRepository.findByLanguage(language)
+                : repositoryRepository.findAll();
+        return (limit != null) ? repos.stream().limit(limit).toList() : repos;
     }
 
     public Optional<AnalysisEntity> getAnalysis(String repositoryId) {
         return analysisRepository.findByRepositoryId(repositoryId);
     }
 
-    public Map addRepository(Map<String, Object> payload) {
-        return fastApiClient.addRepository(payload).block();
-    }
-
-    public Map triggerAnalysis(String repositoryId) {
-        return fastApiClient.triggerAnalysis(repositoryId).block();
+    private String[] parseGithubUrl(String url) {
+        String path = url.replaceAll("https?://github\\.com/", "").replaceAll("\\.git$", "");
+        String[] parts = path.split("/", 2);
+        if (parts.length != 2) throw new IllegalArgumentException("Invalid GitHub URL: " + url);
+        return parts;
     }
 }

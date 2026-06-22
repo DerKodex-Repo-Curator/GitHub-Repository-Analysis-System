@@ -1,19 +1,15 @@
-# Python
-__pycache__/
-*.pyc
-.env
-venv/
-.venv/
-
-# Java / Maven / Spring
+# Java / Maven
 spring-service/target/
 *.class
 *.jar
 
-# Local SQLite dev database
+# H2 local dev database
 *.db
 *.db-shm
 *.db-wal
+
+# Environment variables
+.env
 
 # OS
 .DS_Store

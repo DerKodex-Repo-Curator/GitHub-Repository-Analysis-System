@@ -6,13 +6,14 @@ import com.githubanalysis.service.RepositoryService;
 import org.springframework.graphql.data.method.annotation.Argument;
 import org.springframework.graphql.data.method.annotation.MutationMapping;
 import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.graphql.data.method.annotation.SchemaMapping;
 import org.springframework.stereotype.Controller;
 
 import java.util.List;
-import java.util.Map;
 
 @Controller
 public class RepositoryController {
+
     private final RepositoryService service;
 
     public RepositoryController(RepositoryService service) {
@@ -20,27 +21,32 @@ public class RepositoryController {
     }
 
     @QueryMapping
-    public RepositoryEntity getRepository(@Argument String id) {
+    public RepositoryEntity repository(@Argument String id) {
         return service.getRepository(id).orElse(null);
     }
 
     @QueryMapping
-    public List<RepositoryEntity> listRepositories(@Argument String language, @Argument Integer limit) {
+    public List<RepositoryEntity> repositories(@Argument String language, @Argument Integer limit) {
         return service.listRepositories(language, limit);
     }
 
     @QueryMapping
-    public AnalysisEntity getAnalysis(@Argument String repositoryId) {
+    public AnalysisEntity analysis(@Argument String repositoryId) {
         return service.getAnalysis(repositoryId).orElse(null);
     }
 
-    @MutationMapping
-    public Map addRepository(@Argument String githubUrl) {
-        return service.addRepository(Map.of("github_url", githubUrl));
+    @SchemaMapping(typeName = "Repository", field = "analysis")
+    public AnalysisEntity repositoryAnalysis(RepositoryEntity repository) {
+        return service.getAnalysis(repository.getId()).orElse(null);
     }
 
     @MutationMapping
-    public Map triggerAnalysis(@Argument String repositoryId) {
-        return service.triggerAnalysis(repositoryId);
+    public RepositoryEntity addRepository(@Argument String githubUrl) {
+        return service.addRepository(githubUrl);
+    }
+
+    @MutationMapping
+    public String analyzeRepository(@Argument String id) {
+        return service.triggerAnalysis(id);
     }
 }

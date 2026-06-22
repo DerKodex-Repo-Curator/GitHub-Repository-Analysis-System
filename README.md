@@ -1,6 +1,6 @@
 # RepoLens — GitHub Repository Analyzer
 
-A full-stack portfolio project demonstrating production-style backend engineering. Paste a GitHub URL, get an AI-generated summary, complexity score, and topic breakdown — served through a **Spring Boot GraphQL gateway** and a **FastAPI analysis service**.
+A portfolio project demonstrating production-style backend engineering in Java. Paste a GitHub URL, get an AI-generated summary, complexity score (0–10), and topic tags — served through a **Spring Boot GraphQL API** backed by **PostgreSQL**, **Redis**, and **OpenAI**.
 
 ---
 
@@ -9,17 +9,19 @@ A full-stack portfolio project demonstrating production-style backend engineerin
 ```
 Browser (RepoLens UI)
         │
-        ├─── REST ──────────► FastAPI :8000  ──► SQLite / PostgreSQL
-        │                         │
-        │                         ├─── GitHub API (cached in Redis)
-        │                         └─── OpenAI API (LLM analysis)
-        │
-        └─── GraphQL ───────► Spring Boot :8080 ──► PostgreSQL (shared read model)
-                                    │
-                                    └─── HTTP ──► FastAPI :8000 (mutations)
+        └──► Spring Boot :8080
+                  │
+                  ├── GraphQL API  (resolvers → service → JPA)
+                  ├── GitHub API   (WebClient + Redis cache)
+                  ├── OpenAI API   (WebClient, gpt-4o-mini)
+                  └── H2 / PostgreSQL  (Spring Data JPA)
 ```
 
-Both services share the same database. FastAPI owns all writes; Spring reads via JPA and proxies mutations to FastAPI.
+**Request flow for analysis:**
+1. `addRepository` mutation → fetch GitHub metadata (cached in Redis) → save to DB
+2. `analyzeRepository` mutation → queue `@Async` background job → return immediately
+3. Background job → fetch GitHub README (cached) → call OpenAI → write `Analysis` row to DB
+4. Client polls `analysis(repositoryId)` query until result appears
 
 ---
 
@@ -27,81 +29,77 @@ Both services share the same database. FastAPI owns all writes; Spring reads via
 
 | Layer | Technology |
 |---|---|
-| GraphQL gateway | Spring Boot 3.2, Spring for GraphQL, Spring Data JPA |
-| Analysis service | FastAPI, SQLAlchemy 2.0 async, Alembic, httpx |
-| Database | SQLite (local dev) / PostgreSQL (production) |
-| Caching | Redis — GitHub API responses cached with per-resource TTLs |
-| LLM | OpenAI `gpt-4o-mini` (falls back to a deterministic stub if no API key) |
-| Frontend | Vanilla JS, Tailwind CSS |
-| CI | GitHub Actions — pytest + Maven build |
+| API | Spring Boot 3.2, Spring for GraphQL |
+| Database | Spring Data JPA + H2 (local) / PostgreSQL (prod) |
+| Caching | Spring Data Redis — TTL 1hr (metadata), 6hr (READMEs) |
+| HTTP client | Spring WebFlux `WebClient` |
+| Async jobs | Spring `@Async` with custom `ThreadPoolTaskExecutor` |
+| LLM | OpenAI `gpt-4o-mini` (falls back to stub if no key) |
+| Boilerplate | Lombok (`@Data`, `@Builder`) |
+| Frontend | Vanilla JS + Tailwind CSS |
+| CI | GitHub Actions — Maven build + test on every push |
 
 ---
 
 ## Local Setup
 
-**Prerequisites:** Python 3.11+, Java 17+, Maven
+**Prerequisites:** Java 17+, Maven
 
 ```bash
-# 1. Clone and install Python dependencies
-pip install -r requirements.txt
+# 1. Clone the repo
+git clone <repo-url> && cd repolens
 
-# 2. Copy env file (SQLite is the default — no database install required)
+# 2. Copy env file (H2 is the default — no database install needed)
 cp .env.example .env
 
-# 3. Run database migrations
-PYTHONPATH=. alembic upgrade head
-
-# 4. Start FastAPI  (http://localhost:8000)
-PYTHONPATH=. uvicorn app.main:app --reload --port 8000
-
-# 5. Open the UI
-open frontend/index.html   # or just double-click it
+# 3. Start the server
+cd spring-service
+mvn spring-boot:run
 ```
 
-**Optional — Spring Boot GraphQL gateway:**
-```bash
-cd spring-service && mvn spring-boot:run
-# GraphQL Playground: http://localhost:8080/graphiql
-```
+Open `frontend/index.html` in your browser — that's the UI.
+
+**GraphQL Playground** is available at `http://localhost:8080/graphiql`.
+
+**H2 Console** (inspect the local database) at `http://localhost:8080/h2-console`
+- JDBC URL: `jdbc:h2:file:./repolens-dev`
+- Username: `sa`, Password: _(empty)_
 
 **Optional — Redis caching:**
 ```bash
-redis-server
-# Add REDIS_URL=redis://localhost:6379 to .env
+# Install Redis (macOS)
+brew install redis && brew services start redis
+
+# Install Redis (Windows)
+winget install Redis.Redis
+
 # Without Redis the app works fine; GitHub API calls just skip the cache
 ```
 
 **Optional — OpenAI analysis:**
-```bash
+```
 # Add to .env:
 OPENAI_API_KEY=sk-...
-# Without it the app uses a built-in stub that returns placeholder text
+```
+Without it the app returns a stub message instead of real analysis.
+
+**Production (PostgreSQL):**
+```
+DATASOURCE_URL=jdbc:postgresql://localhost:5432/repolens
+DATASOURCE_USERNAME=postgres
+DATASOURCE_PASSWORD=yourpassword
 ```
 
 ---
 
-## FastAPI Endpoints
+## GraphQL API
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/repositories` | Register a GitHub repo by URL |
-| `GET` | `/api/repositories` | List all tracked repos |
-| `GET` | `/api/repositories/{id}` | Get a single repo |
-| `POST` | `/api/analyze/{id}` | Trigger background LLM analysis |
-| `GET` | `/api/analyze/{id}` | Fetch the latest analysis result |
-
-Auto-generated docs: `http://localhost:8000/docs`
-
----
-
-## GraphQL Examples
-
-Run these in GraphQL Playground at `http://localhost:8080/graphiql`:
+Run queries in the playground at `http://localhost:8080/graphiql`.
 
 ```graphql
 # Add a repository
 mutation {
-  addRepository(githubUrl: "https://github.com/tiangolo/fastapi") {
+  addRepository(githubUrl: "https://github.com/spring-projects/spring-boot") {
     id
     name
     language
@@ -109,74 +107,81 @@ mutation {
   }
 }
 
-# List repositories (optional language filter)
-query {
-  listRepositories(language: "Python", limit: 10) {
-    id
-    name
-    stars
-    language
-  }
-}
-
-# Trigger analysis
+# Trigger analysis (runs in background — poll for results)
 mutation {
-  triggerAnalysis(repositoryId: "REPO_ID_HERE") {
-    id
+  analyzeRepository(id: "REPO_ID_HERE")
+}
+
+# Poll for analysis result
+query {
+  analysis(repositoryId: "REPO_ID_HERE") {
     summary
     complexityScore
     topics
+    analyzedAt
   }
 }
 
-# Fetch analysis
+# List all repositories (optional language filter)
 query {
-  getAnalysis(repositoryId: "REPO_ID_HERE") {
-    summary
-    complexityScore
-    topics
-    createdAt
+  repositories(language: "Java", limit: 10) {
+    id
+    name
+    stars
+    language
+    analysis {
+      complexityScore
+      topics
+    }
   }
 }
 ```
-
----
-
-## Design Decisions
-
-**FastAPI for the analysis service** — Python's async ecosystem (httpx, OpenAI SDK) is the natural fit for a service that chains external HTTP calls. Pydantic gives request validation and auto-generated OpenAPI docs for free.
-
-**Spring Boot + GraphQL as the gateway** — demonstrates an enterprise-grade typed API layer in Java. Resolvers stay thin (delegate to service/repository layers); mutations proxy to FastAPI rather than duplicating write logic.
-
-**Shared database, separate concerns** — one PostgreSQL instance (SQLite locally) acts as the read model for Spring and the write store for FastAPI. Schema evolution is handled by Alembic migrations; Spring's `ddl-auto: none` ensures it never touches the schema.
-
-**Redis caching in front of GitHub API** — metadata is cached for 1 hour, READMEs for 6 hours. The cache layer is a transparent wrapper: if Redis is unavailable, calls fall through to the live API with no user-visible failure.
-
-**Repository + usecase pattern in FastAPI** — `crud.py` handles raw DB access, `analysis_usecase.py` orchestrates the full pipeline (fetch → LLM → store). Business logic stays out of route handlers and is independently testable.
-
-**LLM stub for local dev** — if `OPENAI_API_KEY` is absent the service returns deterministic placeholder output so the full UI flow works without an API key or network access.
 
 ---
 
 ## Project Structure
 
 ```
-├── app/                        # FastAPI service
-│   ├── api/                    # Route handlers and Pydantic schemas
-│   ├── db/                     # SQLAlchemy models, CRUD, session
-│   ├── usecases/               # Analysis orchestration
-│   ├── services_ext/           # GitHub client, LLM, Redis cache
-│   └── core/config.py          # Pydantic settings (env-based)
-├── spring-service/             # Spring Boot GraphQL gateway
-│   └── src/main/
-│       ├── java/.../           # Controllers, services, JPA repos, WebClient
-│       └── resources/
-│           ├── application.yml
-│           └── graphql/schema.graphqls
-├── frontend/                   # Static UI (no build step)
-│   ├── index.html
-│   └── main.js
-├── alembic/                    # Database migrations
-├── tests/                      # Pytest fixtures and route tests
-└── .github/workflows/ci.yml    # GitHub Actions CI
+spring-service/src/main/java/com/githubanalysis/
+├── RepoLensApplication.java       # @SpringBootApplication + @EnableAsync
+├── config/
+│   └── AppConfig.java             # WebClient bean, async thread pool executor
+├── model/
+│   ├── RepositoryEntity.java      # JPA entity (Lombok @Data @Builder)
+│   └── AnalysisEntity.java        # JPA entity + getTopics() for GraphQL
+├── repository/
+│   ├── RepositoryRepository.java  # Spring Data JPA (findByLanguage auto-generated)
+│   └── AnalysisRepository.java    # Spring Data JPA (findByRepositoryId)
+├── client/
+│   ├── GitHubClient.java          # WebClient calls + Redis read-through cache
+│   └── LlmClient.java             # OpenAI chat completions via WebClient
+├── service/
+│   ├── RepositoryService.java     # Orchestrates add/list/get + triggers analysis
+│   └── AnalysisService.java       # @Async pipeline: GitHub → LLM → DB
+└── controller/
+    └── RepositoryController.java  # GraphQL resolvers (@QueryMapping @MutationMapping)
+
+spring-service/src/main/resources/
+├── application.yml                # Config (datasource, Redis, GraphiQL, async)
+└── graphql/schema.graphqls        # GraphQL schema (source of truth)
+
+frontend/
+├── index.html                     # Tailwind UI
+└── main.js                        # GraphQL client — fetch, poll, render
 ```
+
+---
+
+## Design Decisions
+
+**Spring Boot as the single service** — one deployable, one language. Simpler to run, easier to explain, and appropriate for an enterprise Java stack. A separate Python microservice would add complexity without adding value here.
+
+**GraphQL over REST** — clients fetch exactly what they need. The nested `Repository.analysis` query eliminates a round trip the frontend would otherwise need. `@SchemaMapping` resolves nested types cleanly without N+1 queries at this scale.
+
+**`@Async` for analysis jobs** — analysis takes 2–10 seconds (GitHub + OpenAI). Running it on a background thread lets the mutation return immediately. The client polls `analysis(repositoryId)` at 2.5s intervals until the result appears.
+
+**Redis as a transparent cache layer** — all Redis calls are wrapped in try/catch so the app degrades gracefully if Redis is unavailable. TTLs are resource-specific: 1hr for metadata (stars/forks change), 6hr for READMEs (rarely change).
+
+**H2 for local dev** — no PostgreSQL installation required to run the project. Switching to PostgreSQL in production requires one env var change (`DATASOURCE_URL`). Same JPA code, same schema.
+
+**LLM stub fallback** — if `OPENAI_API_KEY` is absent, `LlmClient` returns a deterministic stub. The full UI flow works without spending money on API calls during development.
